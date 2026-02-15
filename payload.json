@@ -1,0 +1,104 @@
+{
+  "timestamp": "2026-02-14T14:09:08.879637+10:00",
+  "token": "pw_tok_example_abc123",
+  "hostname": "web-1",
+  "uptime": 92582,
+  "system": {
+    "os": "linux",
+    "platform": "ubuntu",
+    "platform_version": "22.04",
+    "kernel_version": "6.1.0-18-amd64",
+    "kernel_arch": "x86_64",
+    "virtualization": "kvm",
+    "cpu_model": "Intel(R) Xeon(R) E-2288G CPU @ 3.70GHz"
+  },
+  "load_avg": {
+    "load1": 2.45,
+    "load5": 1.87,
+    "load15": 1.32
+  },
+  "cpu": {
+    "percent": 34.5,
+    "per_core": [
+      42.1,
+      28.3,
+      35.7,
+      31.9
+    ],
+    "core_count": 4
+  },
+  "memory": {
+    "total": 8589934592,
+    "available": 3221225472,
+    "used": 5368709120,
+    "used_percent": 62.5
+  },
+  "swap": {
+    "total": 2147483648,
+    "used": 524288000,
+    "free": 1623195648,
+    "used_percent": 24.41
+  },
+  "disks": [
+    {
+      "mountpoint": "/",
+      "device": "/dev/sda1",
+      "fstype": "ext4",
+      "total": 107374182400,
+      "free": 64424509440,
+      "used": 42949672960,
+      "used_percent": 40.0
+    },
+    {
+      "mountpoint": "/var",
+      "device": "/dev/sda2",
+      "fstype": "ext4",
+      "total": 53687091200,
+      "free": 21474836480,
+      "used": 32212254720,
+      "used_percent": 60.0
+    }
+  ],
+  "disk_io": {
+    "read_bytes": 391543873536,
+    "write_bytes": 428321370112,
+    "read_count": 22743663,
+    "write_count": 19895365,
+    "iops_in_progress": 0
+  },
+  "network": {
+    "bytes_sent_per_sec": 31200.5,
+    "bytes_recv_per_sec": 52400.8,
+    "packets_sent_per_sec": 95.3,
+    "packets_recv_per_sec": 140.7
+  },
+  "processes": [
+    {
+      "pid": 1234,
+      "name": "nginx",
+      "command": "nginx: worker process",
+      "cpu_percent": 12.5,
+      "mem_percent": 3.2,
+      "cpu_time": 4567.89,
+      "memory_bytes": 67108864
+    },
+    {
+      "pid": 5678,
+      "name": "postgres",
+      "command": "/usr/lib/postgresql/15/bin/postgres -D /var/lib/postgresql/15/main",
+      "cpu_percent": 8.1,
+      "mem_percent": 6.7,
+      "cpu_time": 12345.67,
+      "memory_bytes": 268435456
+    },
+    {
+      "pid": 9012,
+      "name": "php-fpm",
+      "command": "php-fpm: pool www",
+      "cpu_percent": 5.3,
+      "mem_percent": 4.1,
+      "cpu_time": 890.12,
+      "memory_bytes": 134217728
+    }
+  ]
+}

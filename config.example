@@ -1,0 +1,13 @@
+# Pulsewise Collector Configuration
+# Copy this file to /etc/pulsewise-collector/config and fill in your values
+
+TOKEN=your-token-here
+
+# Optional — auto-detected from system hostname if omitted
+# HOSTNAME=my-server
+
+# Optional — defaults to https://pulsewise.app/api/collect
+# URL=http://localhost:8000/api/collect
+
+# Optional — logs full response body from the server
+# DEBUG=true
