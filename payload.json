@@ -2,6 +2,7 @@
   "timestamp": "2026-02-14T14:09:08.879637+10:00",
   "token": "pw_tok_example_abc123",
   "hostname": "web-1",
+  "collector_version": "0.2.0",
   "uptime": 92582,
   "system": {
     "os": "linux",
