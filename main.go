@@ -744,6 +744,45 @@ func collectAndSend(config *Config) {
 	log.Printf("Successfully sent metrics at %s", time.Now().Format(time.RFC3339))
 }
 
+// virtualFSTypes are filesystem types that should be excluded from disk
+// reporting — pseudo, read-only, or kernel-managed mounts that aren't
+// real storage (snap loop devices, tmpfs, container overlays, etc.).
+var virtualFSTypes = map[string]bool{
+	"squashfs":    true, // snap packages — always 100% full
+	"tmpfs":       true,
+	"devtmpfs":    true,
+	"ramfs":       true,
+	"overlay":     true,
+	"overlayfs":   true,
+	"proc":        true,
+	"sysfs":       true,
+	"devfs":       true,
+	"cgroup":      true,
+	"cgroup2":     true,
+	"pstore":      true,
+	"efivarfs":    true,
+	"bpf":         true,
+	"fusectl":     true,
+	"hugetlbfs":   true,
+	"mqueue":      true,
+	"debugfs":     true,
+	"tracefs":     true,
+	"securityfs":  true,
+	"configfs":    true,
+	"autofs":      true,
+}
+
+func isVirtualFS(fstype, device string) bool {
+	if virtualFSTypes[fstype] {
+		return true
+	}
+	// Loop devices back read-only images (snaps, ISOs, etc.)
+	if strings.HasPrefix(device, "/dev/loop") {
+		return true
+	}
+	return false
+}
+
 func collectMetrics(config *Config) (*Metrics, error) {
 	metrics := &Metrics{
 		Timestamp:        time.Now().UTC(),
@@ -847,6 +886,9 @@ func collectMetrics(config *Config) (*Metrics, error) {
 		return nil, fmt.Errorf("failed to get disk partitions: %w", err)
 	}
 	for _, p := range partitions {
+		if isVirtualFS(p.Fstype, p.Device) {
+			continue
+		}
 		usage, err := disk.Usage(p.Mountpoint)
 		if err != nil {
 			continue
