@@ -3,6 +3,7 @@
   "token": "pw_tok_example_abc123",
   "hostname": "web-1",
   "collector_version": "0.2.0",
+  "next_update_check": "2026-02-25T16:30:00+10:00",
   "uptime": 92582,
   "system": {
     "os": "linux",

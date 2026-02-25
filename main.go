@@ -60,8 +60,9 @@ type Metrics struct {
 	Timestamp       time.Time       `json:"timestamp"`
 	Token           string          `json:"token"`
 	Hostname        string          `json:"hostname"`
-	CollectorVersion string         `json:"collector_version"`
-	Uptime          uint64          `json:"uptime"`
+	CollectorVersion  string     `json:"collector_version"`
+	NextUpdateCheck   *time.Time `json:"next_update_check,omitempty"`
+	Uptime            uint64     `json:"uptime"`
 	System    SystemInfo      `json:"system"`
 	LoadAvg   LoadMetrics     `json:"load_avg"`
 	CPU       CPUMetrics      `json:"cpu"`
@@ -153,6 +154,10 @@ type ProcessInfo struct {
 }
 
 var prevNet *networkSnapshot
+
+// nextUpdateCheck is set by the auto-updater goroutine so it can be included
+// in every pulse. Nil when auto-update is disabled.
+var nextUpdateCheck *time.Time
 
 func main() {
 	if len(os.Args) > 1 {
@@ -457,7 +462,9 @@ type latestRelease struct {
 }
 
 func runAutoUpdater(config *Config) {
-	// Wait before first check so the initial collection can complete.
+	t := time.Now().Add(30 * time.Second)
+	nextUpdateCheck = &t
+
 	time.Sleep(30 * time.Second)
 	checkAndUpdate(config)
 
@@ -468,12 +475,18 @@ func runAutoUpdater(config *Config) {
 	}
 }
 
+func scheduleNextUpdateCheck() {
+	t := time.Now().Add(updateCheckInterval)
+	nextUpdateCheck = &t
+}
+
 func checkAndUpdate(config *Config) {
 	latest, err := fetchLatestVersion()
 	if err != nil {
 		if config.Debug {
 			log.Printf("[DEBUG] Update check failed: %v", err)
 		}
+		scheduleNextUpdateCheck()
 		return
 	}
 
@@ -481,6 +494,7 @@ func checkAndUpdate(config *Config) {
 		if config.Debug {
 			log.Printf("[DEBUG] Already on latest version %s", version)
 		}
+		scheduleNextUpdateCheck()
 		return
 	}
 
@@ -488,6 +502,7 @@ func checkAndUpdate(config *Config) {
 
 	if err := downloadAndReplace(); err != nil {
 		log.Printf("Auto-update failed: %v", err)
+		scheduleNextUpdateCheck()
 		return
 	}
 
@@ -699,6 +714,7 @@ func collectMetrics(config *Config) (*Metrics, error) {
 		Token:            config.Token,
 		Hostname:         config.Hostname,
 		CollectorVersion: version,
+		NextUpdateCheck:  nextUpdateCheck,
 	}
 
 	// Uptime
