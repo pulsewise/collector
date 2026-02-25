@@ -4,13 +4,16 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/shirou/gopsutil/v3/cpu"
@@ -22,19 +25,25 @@ import (
 	"github.com/shirou/gopsutil/v3/process"
 )
 
+// version is set at build time via -ldflags "-X main.version=x.y.z"
+var version = "0.1.0"
+
 const (
-	defaultURL         = "https://pulsewise.app/api/collect"
-	collectionInterval = 30 * time.Second
-	configFilePath     = "/etc/pulsewise-collector/config"
-	topProcessesCount  = 10
+	defaultURL          = "https://pulsewise.app/api/collect"
+	versionCheckURL     = "https://pulsewise.app/collector/release/latest"
+	collectionInterval  = 30 * time.Second
+	updateCheckInterval = 6 * time.Hour
+	configFilePath      = "/etc/pulsewise-collector/config"
+	topProcessesCount   = 10
 )
 
 type Config struct {
-	Token       string
-	Hostname string
-	URL         string
-	Interval    time.Duration
-	Debug       bool
+	Token      string
+	Hostname   string
+	URL        string
+	Interval   time.Duration
+	Debug      bool
+	AutoUpdate bool
 }
 
 type Metrics struct {
@@ -135,12 +144,25 @@ type ProcessInfo struct {
 var prevNet *networkSnapshot
 
 func main() {
-	config := loadConfig()
+	noAutoUpdate := flag.Bool("no-auto-update", false, "disable automatic updates")
+	flag.Parse()
 
-	log.Printf("Starting Pulsewise collector...")
+	config := loadConfig()
+	config.AutoUpdate = !*noAutoUpdate
+
+	log.Printf("Starting Pulsewise collector (v%s)...", version)
 	log.Printf("Hostname: %s", config.Hostname)
 	log.Printf("Target URL: %s", config.URL)
 	log.Printf("Collection interval: %v", config.Interval)
+	if config.AutoUpdate {
+		log.Printf("Auto-update: enabled")
+	} else {
+		log.Printf("Auto-update: disabled")
+	}
+
+	if config.AutoUpdate {
+		go runAutoUpdater(config)
+	}
 
 	ticker := time.NewTicker(config.Interval)
 	defer ticker.Stop()
@@ -152,6 +174,155 @@ func main() {
 	}
 }
 
+// ─────────────────────────────────────────────────────────────
+// Auto-update
+// ─────────────────────────────────────────────────────────────
+
+type latestRelease struct {
+	Version string `json:"version"`
+}
+
+func runAutoUpdater(config *Config) {
+	// Wait before first check so the initial collection can complete.
+	time.Sleep(30 * time.Second)
+	checkAndUpdate(config)
+
+	ticker := time.NewTicker(updateCheckInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		checkAndUpdate(config)
+	}
+}
+
+func checkAndUpdate(config *Config) {
+	latest, err := fetchLatestVersion()
+	if err != nil {
+		if config.Debug {
+			log.Printf("[DEBUG] Update check failed: %v", err)
+		}
+		return
+	}
+
+	if latest == version {
+		if config.Debug {
+			log.Printf("[DEBUG] Already on latest version %s", version)
+		}
+		return
+	}
+
+	log.Printf("Update available: v%s → v%s. Downloading...", version, latest)
+
+	if err := downloadAndReplace(); err != nil {
+		log.Printf("Auto-update failed: %v", err)
+		return
+	}
+
+	log.Printf("Update successful. Restarting...")
+	execSelf()
+}
+
+func fetchLatestVersion() (string, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(versionCheckURL)
+	if err != nil {
+		return "", fmt.Errorf("version check request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("version check returned status %d", resp.StatusCode)
+	}
+
+	var release latestRelease
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		return "", fmt.Errorf("failed to parse version response: %w", err)
+	}
+
+	if release.Version == "" {
+		return "", fmt.Errorf("empty version in response")
+	}
+
+	return release.Version, nil
+}
+
+func downloadAndReplace() error {
+	goos := runtime.GOOS
+	goarch := runtime.GOARCH
+
+	downloadURL := fmt.Sprintf("https://pulsewise.app/collector/download/%s-%s", goos, goarch)
+
+	selfPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("failed to determine executable path: %w", err)
+	}
+	selfPath, err = filepath.EvalSymlinks(selfPath)
+	if err != nil {
+		return fmt.Errorf("failed to resolve symlinks: %w", err)
+	}
+
+	// Create temp file in the same directory so os.Rename is atomic (same filesystem).
+	tmpFile, err := os.CreateTemp(filepath.Dir(selfPath), ".pulsewise-update-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+
+	cleanup := func() {
+		tmpFile.Close()
+		os.Remove(tmpPath)
+	}
+
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Get(downloadURL)
+	if err != nil {
+		cleanup()
+		return fmt.Errorf("download request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		cleanup()
+		return fmt.Errorf("download failed with status %d", resp.StatusCode)
+	}
+
+	if _, err := io.Copy(tmpFile, resp.Body); err != nil {
+		cleanup()
+		return fmt.Errorf("failed to write downloaded binary: %w", err)
+	}
+	tmpFile.Close()
+
+	if err := os.Chmod(tmpPath, 0755); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("failed to make binary executable: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, selfPath); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("failed to replace binary: %w", err)
+	}
+
+	return nil
+}
+
+// execSelf replaces the current process image with the newly downloaded binary.
+// If exec fails, we exit and let the service manager restart the process.
+func execSelf() {
+	self, err := os.Executable()
+	if err != nil {
+		log.Printf("Failed to get executable path for restart: %v — exiting for service manager restart", err)
+		os.Exit(0)
+	}
+
+	if err := syscall.Exec(self, os.Args, os.Environ()); err != nil {
+		log.Printf("Failed to re-exec after update: %v — exiting for service manager restart", err)
+		os.Exit(0)
+	}
+}
+
+// ─────────────────────────────────────────────────────────────
+// Config
+// ─────────────────────────────────────────────────────────────
+
 func loadConfig() *Config {
 	token, hostname, url, debug, err := loadConfigFromFile()
 	if err != nil {
@@ -159,11 +330,11 @@ func loadConfig() *Config {
 	}
 
 	return &Config{
-		Token:       token,
+		Token:    token,
 		Hostname: hostname,
-		URL:         url,
-		Interval:    collectionInterval,
-		Debug:       debug,
+		URL:      url,
+		Interval: collectionInterval,
+		Debug:    debug,
 	}
 }
 
