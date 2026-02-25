@@ -9,5 +9,8 @@ TOKEN=your-token-here
 # Optional — defaults to https://pulsewise.app/api/collect
 # URL=http://localhost:8000/api/collect
 
+# Optional — set to false to disable automatic updates (default: true)
+# AUTO_UPDATE=false
+
 # Optional — logs full response body from the server
 # DEBUG=true

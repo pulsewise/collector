@@ -181,7 +181,9 @@ func main() {
 	flag.Parse()
 
 	config := loadConfig()
-	config.AutoUpdate = !*noAutoUpdate
+	if *noAutoUpdate {
+		config.AutoUpdate = false
+	}
 
 	log.Printf("Starting Pulsewise collector (v%s)...", version)
 	log.Printf("Hostname: %s", config.Hostname)
@@ -195,6 +197,8 @@ func main() {
 
 	if config.AutoUpdate {
 		go runAutoUpdater(config)
+	} else {
+		nextUpdateCheck = nil
 	}
 
 	ticker := time.NewTicker(config.Interval)
@@ -289,7 +293,7 @@ func runStatusCommand() {
 	fmt.Printf("\n%spulsewise-collector%s v%s\n\n", bold, nc, version)
 
 	// Config
-	token, hostname, url, _, err := loadConfigFromFile()
+	token, hostname, url, _, autoUpdate, err := loadConfigFromFile()
 	if err != nil {
 		fmt.Printf("%s  Not configured — %v\n\n", red, nc)
 	} else {
@@ -299,11 +303,16 @@ func runStatusCommand() {
 		} else {
 			maskedToken = "****"
 		}
+		autoUpdateStr := green + "enabled" + nc
+		if !autoUpdate {
+			autoUpdateStr = dim + "disabled" + nc
+		}
 		fmt.Printf("%sCollector%s\n", bold, nc)
 		fmt.Printf("%s %s\n", label("Hostname"), hostname)
 		fmt.Printf("%s %s\n", label("Token"), maskedToken)
 		fmt.Printf("%s %s\n", label("API endpoint"), url)
 		fmt.Printf("%s %s\n", label("Interval"), collectionInterval)
+		fmt.Printf("%s %s\n", label("Auto-update"), autoUpdateStr)
 		fmt.Println()
 	}
 
@@ -633,21 +642,22 @@ func execSelf() {
 // ─────────────────────────────────────────────────────────────
 
 func loadConfig() *Config {
-	token, hostname, url, debug, err := loadConfigFromFile()
+	token, hostname, url, debug, autoUpdate, err := loadConfigFromFile()
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
 	return &Config{
-		Token:    token,
-		Hostname: hostname,
-		URL:      url,
-		Interval: collectionInterval,
-		Debug:    debug,
+		Token:      token,
+		Hostname:   hostname,
+		URL:        url,
+		Interval:   collectionInterval,
+		Debug:      debug,
+		AutoUpdate: autoUpdate,
 	}
 }
 
-func loadConfigFromFile() (string, string, string, bool, error) {
+func loadConfigFromFile() (string, string, string, bool, bool, error) {
 	configPath := configFilePath
 
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
@@ -662,12 +672,13 @@ func loadConfigFromFile() (string, string, string, bool, error) {
 
 	file, err := os.Open(configPath)
 	if err != nil {
-		return "", "", "", false, fmt.Errorf("config file not found at %s: %w", configPath, err)
+		return "", "", "", false, false, fmt.Errorf("config file not found at %s: %w", configPath, err)
 	}
 	defer file.Close()
 
 	var token, hostname, url string
 	var debug bool
+	autoUpdate := true
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
@@ -692,14 +703,19 @@ func loadConfigFromFile() (string, string, string, bool, error) {
 			val = strings.Trim(val, `"'`)
 			debug = val == "true" || val == "1"
 		}
+		if strings.HasPrefix(line, "AUTO_UPDATE=") {
+			val := strings.TrimPrefix(line, "AUTO_UPDATE=")
+			val = strings.Trim(val, `"'`)
+			autoUpdate = val != "false" && val != "0"
+		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		return "", "", "", false, fmt.Errorf("error reading config file: %w", err)
+		return "", "", "", false, false, fmt.Errorf("error reading config file: %w", err)
 	}
 
 	if token == "" {
-		return "", "", "", false, fmt.Errorf("TOKEN not found in config file")
+		return "", "", "", false, false, fmt.Errorf("TOKEN not found in config file")
 	}
 	if hostname == "" {
 		hostname, _ = os.Hostname()
@@ -709,7 +725,7 @@ func loadConfigFromFile() (string, string, string, bool, error) {
 		url = defaultURL
 	}
 
-	return token, hostname, url, debug, nil
+	return token, hostname, url, debug, autoUpdate, nil
 }
 
 func collectAndSend(config *Config) {
