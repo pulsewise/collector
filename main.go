@@ -184,6 +184,9 @@ func main() {
 		case "uninstall":
 			runUninstallCommand()
 			return
+		case "dump":
+			runDumpCommand()
+			return
 		}
 	}
 
@@ -275,6 +278,29 @@ func runUpdateCommand() {
 
 	fmt.Printf("%sDone.%s\n", ansiGreen, ansiReset)
 	fmt.Printf("  Successfully updated to %sv%s%s.\n\n", ansiCyan, latest, ansiReset)
+}
+
+func runDumpCommand() {
+	if os.Getuid() != 0 {
+		reexecWithSudo()
+		return
+	}
+
+	config := loadConfig()
+
+	metrics, err := collectMetrics(config)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%sError collecting metrics: %v%s\n", ansiRed, err, ansiReset)
+		os.Exit(1)
+	}
+
+	out, err := json.MarshalIndent(metrics, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%sError marshalling metrics: %v%s\n", ansiRed, err, ansiReset)
+		os.Exit(1)
+	}
+
+	fmt.Println(string(out))
 }
 
 func reexecWithSudo() {
