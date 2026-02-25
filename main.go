@@ -255,7 +255,27 @@ func runUpdateCommand() {
 	fmt.Printf("Done.\nSuccessfully updated to v%s.\n", latest)
 }
 
+func reexecWithSudo() {
+	self, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	cmd := exec.Command("sudo", append([]string{self}, os.Args[1:]...)...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		os.Exit(1)
+	}
+}
+
 func runStatusCommand() {
+	if os.Getuid() != 0 {
+		reexecWithSudo()
+		return
+	}
+
 	const (
 		bold  = "\033[1m"
 		dim   = "\033[2m"
