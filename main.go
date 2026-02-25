@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -81,7 +82,9 @@ type Metrics struct {
 	Disks     []DiskMetrics   `json:"disks"`
 	DiskIO    DiskIOMetrics   `json:"disk_io"`
 	Network   *NetworkMetrics `json:"network"`
-	Processes []ProcessInfo   `json:"processes"`
+	Processes       []ProcessInfo    `json:"processes"`
+	TCP             *TCPStats        `json:"tcp,omitempty"`
+	FileDescriptors *FileDescriptors `json:"file_descriptors,omitempty"`
 }
 
 type SystemInfo struct {
@@ -102,8 +105,22 @@ type LoadMetrics struct {
 
 type CPUMetrics struct {
 	Percent float64   `json:"percent"`
+	Iowait  float64   `json:"iowait_percent"`
 	PerCore []float64 `json:"per_core"`
 	Count   int       `json:"core_count"`
+}
+
+type TCPStats struct {
+	Established int `json:"established"`
+	TimeWait    int `json:"time_wait"`
+	CloseWait   int `json:"close_wait"`
+	Listen      int `json:"listen"`
+	MaxTimeWait int `json:"max_time_wait,omitempty"` // Linux only
+}
+
+type FileDescriptors struct {
+	Used int `json:"used"`
+	Max  int `json:"max"`
 }
 
 type MemoryMetrics struct {
@@ -877,6 +894,15 @@ func collectMetrics(config *Config) (*Metrics, error) {
 		metrics.CPU.Percent = sum / float64(len(cpuPerCore))
 	}
 
+	cpuTimes, err := cpu.Times(false)
+	if err == nil && len(cpuTimes) > 0 {
+		t := cpuTimes[0]
+		total := t.User + t.System + t.Idle + t.Iowait + t.Irq + t.Softirq + t.Steal + t.Nice + t.Guest + t.GuestNice
+		if total > 0 {
+			metrics.CPU.Iowait = (t.Iowait / total) * 100
+		}
+	}
+
 	cpuCount, err := cpu.Counts(true)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get CPU count: %w", err)
@@ -1005,7 +1031,80 @@ func collectMetrics(config *Config) (*Metrics, error) {
 		metrics.Processes = processes
 	}
 
+	metrics.TCP = collectTCPStats()
+	metrics.FileDescriptors = collectFileDescriptors()
+
 	return metrics, nil
+}
+
+func collectTCPStats() *TCPStats {
+	conns, err := net.Connections("tcp")
+	if err != nil {
+		return nil
+	}
+	conns6, _ := net.Connections("tcp6")
+	conns = append(conns, conns6...)
+
+	stats := &TCPStats{}
+	for _, c := range conns {
+		switch c.Status {
+		case "ESTABLISHED":
+			stats.Established++
+		case "TIME_WAIT":
+			stats.TimeWait++
+		case "CLOSE_WAIT":
+			stats.CloseWait++
+		case "LISTEN":
+			stats.Listen++
+		}
+	}
+
+	// Linux: include the system TIME_WAIT bucket limit for context
+	if runtime.GOOS == "linux" {
+		if data, err := os.ReadFile("/proc/sys/net/ipv4/tcp_max_tw_buckets"); err == nil {
+			if v, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
+				stats.MaxTimeWait = v
+			}
+		}
+	}
+
+	return stats
+}
+
+func collectFileDescriptors() *FileDescriptors {
+	switch runtime.GOOS {
+	case "linux":
+		// /proc/sys/fs/file-nr: allocated  unused  max
+		data, err := os.ReadFile("/proc/sys/fs/file-nr")
+		if err != nil {
+			return nil
+		}
+		fields := strings.Fields(string(data))
+		if len(fields) < 3 {
+			return nil
+		}
+		used, err1 := strconv.Atoi(fields[0])
+		max, err2 := strconv.Atoi(fields[2])
+		if err1 != nil || err2 != nil {
+			return nil
+		}
+		return &FileDescriptors{Used: used, Max: max}
+
+	case "darwin":
+		openOut, err1 := exec.Command("sysctl", "-n", "kern.openfiles").Output()
+		maxOut, err2 := exec.Command("sysctl", "-n", "kern.maxfiles").Output()
+		if err1 != nil || err2 != nil {
+			return nil
+		}
+		used, err1 := strconv.Atoi(strings.TrimSpace(string(openOut)))
+		max, err2 := strconv.Atoi(strings.TrimSpace(string(maxOut)))
+		if err1 != nil || err2 != nil {
+			return nil
+		}
+		return &FileDescriptors{Used: used, Max: max}
+	}
+
+	return nil
 }
 
 func collectTopProcesses() ([]ProcessInfo, error) {

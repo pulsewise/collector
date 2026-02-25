@@ -21,6 +21,7 @@
   },
   "cpu": {
     "percent": 34.5,
+    "iowait_percent": 4.2,
     "per_core": [
       42.1,
       28.3,
@@ -73,6 +74,17 @@
     "bytes_recv_per_sec": 52400.8,
     "packets_sent_per_sec": 95.3,
     "packets_recv_per_sec": 140.7
+  },
+  "tcp": {
+    "established": 42,
+    "time_wait": 18,
+    "close_wait": 3,
+    "listen": 8,
+    "max_time_wait": 32768
+  },
+  "file_descriptors": {
+    "used": 1248,
+    "max": 98304
   },
   "processes": [
     {
