@@ -861,20 +861,21 @@ func collectMetrics(config *Config) (*Metrics, error) {
 		}
 	}
 
-	// CPU
-	cpuPercent, err := cpu.Percent(time.Second, false)
+	// CPU — single sample with percpu=true, then average for the total.
+	// Calling cpu.Percent twice with separate 1s windows can produce
+	// wildly inconsistent totals vs per-core values.
+	cpuPerCore, err := cpu.Percent(time.Second, true)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get CPU percent: %w", err)
 	}
-	if len(cpuPercent) > 0 {
-		metrics.CPU.Percent = cpuPercent[0]
+	metrics.CPU.PerCore = cpuPerCore
+	if len(cpuPerCore) > 0 {
+		var sum float64
+		for _, p := range cpuPerCore {
+			sum += p
+		}
+		metrics.CPU.Percent = sum / float64(len(cpuPerCore))
 	}
-
-	cpuPercentPerCore, err := cpu.Percent(time.Second, true)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get per-core CPU percent: %w", err)
-	}
-	metrics.CPU.PerCore = cpuPercentPerCore
 
 	cpuCount, err := cpu.Counts(true)
 	if err != nil {
