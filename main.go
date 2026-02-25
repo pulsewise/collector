@@ -482,7 +482,7 @@ type latestRelease struct {
 }
 
 func runAutoUpdater(config *Config) {
-	t := time.Now().Add(30 * time.Second)
+	t := time.Now().UTC().Add(30 * time.Second)
 	nextUpdateCheck = &t
 
 	time.Sleep(30 * time.Second)
@@ -496,7 +496,7 @@ func runAutoUpdater(config *Config) {
 }
 
 func scheduleNextUpdateCheck() {
-	t := time.Now().Add(updateCheckInterval)
+	t := time.Now().UTC().Add(updateCheckInterval)
 	nextUpdateCheck = &t
 }
 
@@ -730,7 +730,7 @@ func collectAndSend(config *Config) {
 
 func collectMetrics(config *Config) (*Metrics, error) {
 	metrics := &Metrics{
-		Timestamp:        time.Now(),
+		Timestamp:        time.Now().UTC(),
 		Token:            config.Token,
 		Hostname:         config.Hostname,
 		CollectorVersion: version,
