@@ -208,6 +208,8 @@ print_summary() {
     echo ""
     echo -e "  ${GREEN}${BOLD}Setup complete.${NC}"
     echo ""
+    INSTALLED_VERSION=$("$BINARY_PATH" version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown")
+    echo -e "  ${DIM}Version:${NC}  v$INSTALLED_VERSION"
     echo -e "  ${DIM}Hostname:${NC} $COLLECTOR_HOSTNAME"
     echo -e "  ${DIM}Config:${NC}   $CONFIG_FILE"
     echo -e "  ${DIM}Binary:${NC}   $BINARY_PATH"
