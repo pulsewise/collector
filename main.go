@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -908,12 +909,34 @@ func collectMetrics(config *Config) (*Metrics, error) {
 		}
 	}
 
-	// CPU — single sample with percpu=true, then average for the total.
-	// Calling cpu.Percent twice with separate 1s windows can produce
-	// wildly inconsistent totals vs per-core values.
-	cpuPerCore, err := cpu.Percent(time.Second, true)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get CPU percent: %w", err)
+	// CPU and process collection run concurrently so their measurement
+	// windows overlap. Previously, processes were sampled 1+ second after
+	// the CPU window ended, causing spikes to appear in system CPU but not
+	// in the process list (the offending process had already finished).
+	var (
+		cpuPerCore []float64
+		cpuErr     error
+		processes  []ProcessInfo
+		processErr error
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		cpuPerCore, cpuErr = cpu.Percent(time.Second, true)
+	}()
+
+	go func() {
+		defer wg.Done()
+		processes, processErr = collectTopProcesses()
+	}()
+
+	wg.Wait()
+
+	if cpuErr != nil {
+		return nil, fmt.Errorf("failed to get CPU percent: %w", cpuErr)
 	}
 	metrics.CPU.PerCore = cpuPerCore
 	if len(cpuPerCore) > 0 {
@@ -1052,10 +1075,9 @@ func collectMetrics(config *Config) (*Metrics, error) {
 		prevNet = current
 	}
 
-	// Top processes
-	processes, err := collectTopProcesses()
-	if err != nil {
-		log.Printf("Warning: Failed to collect process info: %v", err)
+	// Top processes (collected concurrently with CPU above)
+	if processErr != nil {
+		log.Printf("Warning: Failed to collect process info: %v", processErr)
 		metrics.Processes = []ProcessInfo{}
 	} else {
 		metrics.Processes = processes
