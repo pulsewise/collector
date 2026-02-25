@@ -30,6 +30,16 @@ import (
 var version = "dev"
 
 const (
+	ansiReset  = "\033[0m"
+	ansiBold   = "\033[1m"
+	ansiDim    = "\033[2m"
+	ansiCyan   = "\033[0;36m"
+	ansiGreen  = "\033[0;32m"
+	ansiYellow = "\033[1;33m"
+	ansiRed    = "\033[0;31m"
+)
+
+const (
 	defaultURL          = "https://pulsewise.app/api/collect"
 	versionCheckURL     = "https://pulsewise.app/collector/release/latest"
 	collectionInterval  = 30 * time.Second
@@ -216,47 +226,55 @@ func main() {
 // ─────────────────────────────────────────────────────────────
 
 func runVersionCommand() {
-	fmt.Printf("pulsewise-collector v%s\n\n", version)
+	fmt.Printf("\n  %spulsewise-collector%s\n", ansiBold, ansiReset)
+	fmt.Printf("  %s%sv%s%s\n\n", ansiBold, ansiCyan, version, ansiReset)
 
-	fmt.Print("Checking for updates... ")
+	fmt.Printf("  %sChecking for updates...%s ", ansiDim, ansiReset)
 	latest, err := fetchLatestVersion()
 	if err != nil {
-		fmt.Printf("(update check failed: %v)\n", err)
+		fmt.Printf("%s(update check failed: %v)%s\n\n", ansiDim, err, ansiReset)
 		return
 	}
 
 	if latest == version {
-		fmt.Println("You are on the latest version.")
+		fmt.Printf("%sYou are on the latest version.%s\n\n", ansiGreen, ansiReset)
 	} else {
-		fmt.Printf("v%s is available.\n", latest)
-		fmt.Println("Run 'pulsewise-collector update' to upgrade.")
+		fmt.Printf("%sv%s is available%s\n", ansiYellow, latest, ansiReset)
+		fmt.Printf("  %sRun 'pulsewise-collector update' to upgrade.%s\n\n", ansiDim, ansiReset)
 	}
 }
 
 func runUpdateCommand() {
-	fmt.Printf("pulsewise-collector v%s\n\n", version)
+	if os.Getuid() != 0 {
+		reexecWithSudo()
+		return
+	}
 
-	fmt.Print("Checking for updates... ")
+	fmt.Printf("\n  %spulsewise-collector%s\n", ansiBold, ansiReset)
+	fmt.Printf("  %s%sv%s%s\n\n", ansiBold, ansiCyan, version, ansiReset)
+
+	fmt.Printf("  %sChecking for updates...%s ", ansiDim, ansiReset)
 	latest, err := fetchLatestVersion()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "update check failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "%supdate check failed: %v%s\n\n", ansiRed, err, ansiReset)
 		os.Exit(1)
 	}
 
 	if latest == version {
-		fmt.Printf("Already on the latest version (v%s).\n", version)
+		fmt.Printf("%sAlready on the latest version.%s\n\n", ansiGreen, ansiReset)
 		return
 	}
 
-	fmt.Printf("v%s is available.\n\n", latest)
-	fmt.Print("Downloading... ")
+	fmt.Printf("%sv%s is available%s\n\n", ansiYellow, latest, ansiReset)
+	fmt.Printf("  %sDownloading...%s ", ansiDim, ansiReset)
 
 	if err := downloadAndReplace(); err != nil {
-		fmt.Fprintf(os.Stderr, "\nUpdate failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "\n  %sUpdate failed: %v%s\n\n", ansiRed, err, ansiReset)
 		os.Exit(1)
 	}
 
-	fmt.Printf("Done.\nSuccessfully updated to v%s.\n", latest)
+	fmt.Printf("%sDone.%s\n", ansiGreen, ansiReset)
+	fmt.Printf("  Successfully updated to %sv%s%s.\n\n", ansiCyan, latest, ansiReset)
 }
 
 func reexecWithSudo() {
@@ -280,22 +298,14 @@ func runStatusCommand() {
 		return
 	}
 
-	const (
-		bold  = "\033[1m"
-		dim   = "\033[2m"
-		green = "\033[0;32m"
-		red   = "\033[0;31m"
-		nc    = "\033[0m"
-	)
+	label := func(s string) string { return fmt.Sprintf("  %s%-16s%s", ansiDim, s, ansiReset) }
 
-	label := func(s string) string { return fmt.Sprintf("  %s%-16s%s", dim, s, nc) }
-
-	fmt.Printf("\n%spulsewise-collector%s v%s\n\n", bold, nc, version)
+	fmt.Printf("\n%spulsewise-collector%s v%s\n\n", ansiBold, ansiReset, version)
 
 	// Config
 	token, hostname, url, _, autoUpdate, err := loadConfigFromFile()
 	if err != nil {
-		fmt.Printf("%s  Not configured — %v\n\n", red, nc)
+		fmt.Printf("%s  Not configured — %v\n\n", ansiRed, ansiReset)
 	} else {
 		maskedToken := token
 		if len(token) >= 8 {
@@ -303,11 +313,11 @@ func runStatusCommand() {
 		} else {
 			maskedToken = "****"
 		}
-		autoUpdateStr := green + "enabled" + nc
+		autoUpdateStr := ansiGreen + "enabled" + ansiReset
 		if !autoUpdate {
-			autoUpdateStr = dim + "disabled" + nc
+			autoUpdateStr = ansiDim + "disabled" + ansiReset
 		}
-		fmt.Printf("%sCollector%s\n", bold, nc)
+		fmt.Printf("%sCollector%s\n", ansiBold, ansiReset)
 		fmt.Printf("%s %s\n", label("Hostname"), hostname)
 		fmt.Printf("%s %s\n", label("Token"), maskedToken)
 		fmt.Printf("%s %s\n", label("API endpoint"), url)
@@ -317,22 +327,22 @@ func runStatusCommand() {
 	}
 
 	// Service status
-	fmt.Printf("%sService%s\n", bold, nc)
+	fmt.Printf("%sService%s\n", ansiBold, ansiReset)
 	switch runtime.GOOS {
 	case "linux":
 		out, err := exec.Command("systemctl", "is-active", systemdUnit).Output()
 		state := strings.TrimSpace(string(out))
 		if err == nil && state == "active" {
-			fmt.Printf("%s %srunning%s (systemd)\n", label("Status"), green, nc)
+			fmt.Printf("%s %srunning%s (systemd)\n", label("Status"), ansiGreen, ansiReset)
 		} else {
-			fmt.Printf("%s %sstopped%s (systemd)\n", label("Status"), red, nc)
+			fmt.Printf("%s %sstopped%s (systemd)\n", label("Status"), ansiRed, ansiReset)
 		}
 	case "darwin":
 		err := exec.Command("launchctl", "list", launchdLabel).Run()
 		if err == nil {
-			fmt.Printf("%s %srunning%s (launchd)\n", label("Status"), green, nc)
+			fmt.Printf("%s %srunning%s (launchd)\n", label("Status"), ansiGreen, ansiReset)
 		} else {
-			fmt.Printf("%s %sstopped%s (launchd)\n", label("Status"), red, nc)
+			fmt.Printf("%s %sstopped%s (launchd)\n", label("Status"), ansiRed, ansiReset)
 		}
 	default:
 		fmt.Printf("%s unknown platform\n", label("Status"))
@@ -341,7 +351,7 @@ func runStatusCommand() {
 	// Last pulse
 	if t, err := readLastPulse(); err == nil {
 		ago := time.Since(t).Round(time.Second)
-		fmt.Printf("%s %s  %s(%s ago)%s\n", label("Last pulse"), t.Format("2006-01-02 15:04:05"), dim, ago, nc)
+		fmt.Printf("%s %s  %s(%s ago)%s\n", label("Last pulse"), t.Format("2006-01-02 15:04:05"), ansiDim, ago, ansiReset)
 	} else {
 		fmt.Printf("%s never\n", label("Last pulse"))
 	}
@@ -349,25 +359,16 @@ func runStatusCommand() {
 }
 
 func runUninstallCommand() {
-	const (
-		bold   = "\033[1m"
-		dim    = "\033[2m"
-		green  = "\033[0;32m"
-		red    = "\033[0;31m"
-		yellow = "\033[1;33m"
-		nc     = "\033[0m"
-	)
-
 	if os.Getuid() != 0 {
-		fmt.Fprintf(os.Stderr, "%sError:%s uninstall must be run as root (try sudo pulsewise-collector uninstall)\n", red, nc)
+		fmt.Fprintf(os.Stderr, "%sError:%s uninstall must be run as root (try sudo pulsewise-collector uninstall)\n", ansiRed, ansiReset)
 		os.Exit(1)
 	}
 
 	selfPath, _ := os.Executable()
 	selfPath, _ = filepath.EvalSymlinks(selfPath)
 
-	fmt.Printf("\n%sUninstall pulsewise-collector%s\n\n", bold, nc)
-	fmt.Printf("  %sThe following will be removed:%s\n", dim, nc)
+	fmt.Printf("\n%sUninstall pulsewise-collector%s\n\n", ansiBold, ansiReset)
+	fmt.Printf("  %sThe following will be removed:%s\n", ansiDim, ansiReset)
 
 	switch runtime.GOOS {
 	case "linux":
@@ -380,7 +381,7 @@ func runUninstallCommand() {
 	fmt.Printf("    Config    %s/\n", configDir)
 	fmt.Println()
 
-	fmt.Printf("  %sAre you sure?%s [y/N]: ", yellow, nc)
+	fmt.Printf("  %sAre you sure?%s [y/N]: ", ansiYellow, ansiReset)
 	var reply string
 	fmt.Scanln(&reply)
 	if strings.ToLower(strings.TrimSpace(reply)) != "y" {
@@ -392,9 +393,9 @@ func runUninstallCommand() {
 	step := func(label, path string, fn func() error) {
 		fmt.Printf("  %-28s", label+"...")
 		if err := fn(); err != nil {
-			fmt.Printf("%sfailed%s (%v)\n", red, nc, err)
+			fmt.Printf("%sfailed%s (%v)\n", ansiRed, ansiReset, err)
 		} else {
-			fmt.Printf("%sdone%s\n", green, nc)
+			fmt.Printf("%sdone%s\n", ansiGreen, ansiReset)
 		}
 	}
 
@@ -440,7 +441,7 @@ func runUninstallCommand() {
 		return os.Remove(selfPath)
 	})
 
-	fmt.Printf("\n  %sPulsewise Collector has been uninstalled.%s\n\n", green, nc)
+	fmt.Printf("\n  %sPulsewise Collector has been uninstalled.%s\n\n", ansiGreen, ansiReset)
 }
 
 // ─────────────────────────────────────────────────────────────
