@@ -246,8 +246,7 @@ func main() {
 // ─────────────────────────────────────────────────────────────
 
 func runVersionCommand() {
-	fmt.Printf("\n  %spulsewise-collector%s\n", ansiBold, ansiReset)
-	fmt.Printf("  %s%sv%s%s\n\n", ansiBold, ansiCyan, version, ansiReset)
+	fmt.Printf("\n  %spulsewise-collector %s%sv%s%s\n\n", ansiBold, ansiReset, ansiCyan, version, ansiReset)
 
 	fmt.Printf("  %sChecking for updates...%s ", ansiDim, ansiReset)
 	latest, err := fetchLatestVersion()
@@ -270,8 +269,7 @@ func runUpdateCommand() {
 		return
 	}
 
-	fmt.Printf("\n  %spulsewise-collector%s\n", ansiBold, ansiReset)
-	fmt.Printf("  %s%sv%s%s\n\n", ansiBold, ansiCyan, version, ansiReset)
+	fmt.Printf("\n  %spulsewise-collector %s%sv%s%s\n\n", ansiBold, ansiReset, ansiCyan, version, ansiReset)
 
 	fmt.Printf("  %sChecking for updates...%s ", ansiDim, ansiReset)
 	latest, err := fetchLatestVersion()
@@ -293,7 +291,7 @@ func runUpdateCommand() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("%sDone.%s\n", ansiGreen, ansiReset)
+	fmt.Printf("%sDone.%s\n\n", ansiGreen, ansiReset)
 	fmt.Printf("  Successfully updated to %sv%s%s.\n\n", ansiCyan, latest, ansiReset)
 
 	restartService()
