@@ -43,7 +43,7 @@ const (
 const (
 	defaultURL          = "https://pulsewise.app/api/collect"
 	versionCheckURL     = "https://pulsewise.app/collector/release/latest"
-	collectionInterval  = 30 * time.Second
+	collectionInterval  = 60 * time.Second
 	updateCheckInterval = 6 * time.Hour
 	configFilePath      = "/etc/pulsewise-collector/config"
 	stateFilePath       = "/etc/pulsewise-collector/state"
