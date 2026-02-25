@@ -295,6 +295,31 @@ func runUpdateCommand() {
 
 	fmt.Printf("%sDone.%s\n", ansiGreen, ansiReset)
 	fmt.Printf("  Successfully updated to %sv%s%s.\n\n", ansiCyan, latest, ansiReset)
+
+	restartService()
+}
+
+func restartService() {
+	fmt.Printf("  %sRestarting service...%s ", ansiDim, ansiReset)
+
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "linux":
+		cmd = exec.Command("systemctl", "restart", systemdUnit)
+	case "darwin":
+		cmd = exec.Command("launchctl", "kickstart", "-k", "system/"+launchdLabel)
+	default:
+		fmt.Printf("%snot supported on this platform%s\n\n", ansiDim, ansiReset)
+		return
+	}
+
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("%sfailed%s (%v)\n", ansiRed, ansiReset, err)
+		fmt.Printf("  %sRestart manually: systemctl restart %s%s\n\n", ansiDim, systemdUnit, ansiReset)
+		return
+	}
+
+	fmt.Printf("%sdone%s\n\n", ansiGreen, ansiReset)
 }
 
 func runDumpCommand() {
@@ -579,8 +604,15 @@ func checkAndUpdate(config *Config) {
 		return
 	}
 
-	log.Printf("Update successful. Restarting...")
-	execSelf()
+	log.Printf("Update successful. Restarting service...")
+	switch runtime.GOOS {
+	case "linux":
+		exec.Command("systemctl", "restart", systemdUnit).Run()
+	case "darwin":
+		exec.Command("launchctl", "kickstart", "-k", "system/"+launchdLabel).Run()
+	default:
+		execSelf()
+	}
 }
 
 func fetchLatestVersion() (string, error) {
