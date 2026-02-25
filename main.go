@@ -26,7 +26,7 @@ import (
 )
 
 // version is set at build time via -ldflags "-X main.version=x.y.z"
-var version = "0.1.0"
+var version = "dev"
 
 const (
 	defaultURL          = "https://pulsewise.app/api/collect"
@@ -144,6 +144,17 @@ type ProcessInfo struct {
 var prevNet *networkSnapshot
 
 func main() {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "version":
+			runVersionCommand()
+			return
+		case "update":
+			runUpdateCommand()
+			return
+		}
+	}
+
 	noAutoUpdate := flag.Bool("no-auto-update", false, "disable automatic updates")
 	flag.Parse()
 
@@ -172,6 +183,54 @@ func main() {
 	for range ticker.C {
 		collectAndSend(config)
 	}
+}
+
+// ─────────────────────────────────────────────────────────────
+// Subcommands
+// ─────────────────────────────────────────────────────────────
+
+func runVersionCommand() {
+	fmt.Printf("pulsewise-collector v%s\n\n", version)
+
+	fmt.Print("Checking for updates... ")
+	latest, err := fetchLatestVersion()
+	if err != nil {
+		fmt.Printf("(update check failed: %v)\n", err)
+		return
+	}
+
+	if latest == version {
+		fmt.Println("You are on the latest version.")
+	} else {
+		fmt.Printf("v%s is available.\n", latest)
+		fmt.Println("Run 'pulsewise-collector update' to upgrade.")
+	}
+}
+
+func runUpdateCommand() {
+	fmt.Printf("pulsewise-collector v%s\n\n", version)
+
+	fmt.Print("Checking for updates... ")
+	latest, err := fetchLatestVersion()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "update check failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	if latest == version {
+		fmt.Printf("Already on the latest version (v%s).\n", version)
+		return
+	}
+
+	fmt.Printf("v%s is available.\n\n", latest)
+	fmt.Print("Downloading... ")
+
+	if err := downloadAndReplace(); err != nil {
+		fmt.Fprintf(os.Stderr, "\nUpdate failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Done.\nSuccessfully updated to v%s.\n", latest)
 }
 
 // ─────────────────────────────────────────────────────────────

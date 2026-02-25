@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-VERSION="${VERSION:-0.1.0}"
+VERSION="${VERSION:-$(cat VERSION)}"
 
 go build -ldflags "-X main.version=${VERSION}" -o pulsewise-collector .
 echo "Built: pulsewise-collector (v${VERSION})"
