@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -34,7 +35,16 @@ const (
 	collectionInterval  = 30 * time.Second
 	updateCheckInterval = 6 * time.Hour
 	configFilePath      = "/etc/pulsewise-collector/config"
+	stateFilePath       = "/etc/pulsewise-collector/state"
 	topProcessesCount   = 10
+
+	launchdLabel    = "app.pulsewise.collector"
+	launchdPlist    = "/Library/LaunchDaemons/app.pulsewise.collector.plist"
+	systemdUnit     = "pulsewise-collector"
+	systemdUnitFile = "/etc/systemd/system/pulsewise-collector.service"
+	binaryPath      = "/usr/local/bin/pulsewise-collector"
+	configDir       = "/etc/pulsewise-collector"
+	macLogFile      = "/var/log/pulsewise-collector.log"
 )
 
 type Config struct {
@@ -47,10 +57,11 @@ type Config struct {
 }
 
 type Metrics struct {
-	Timestamp time.Time       `json:"timestamp"`
-	Token     string          `json:"token"`
-	Hostname  string          `json:"hostname"`
-	Uptime    uint64          `json:"uptime"`
+	Timestamp       time.Time       `json:"timestamp"`
+	Token           string          `json:"token"`
+	Hostname        string          `json:"hostname"`
+	CollectorVersion string         `json:"collector_version"`
+	Uptime          uint64          `json:"uptime"`
 	System    SystemInfo      `json:"system"`
 	LoadAvg   LoadMetrics     `json:"load_avg"`
 	CPU       CPUMetrics      `json:"cpu"`
@@ -152,6 +163,12 @@ func main() {
 		case "update":
 			runUpdateCommand()
 			return
+		case "status":
+			runStatusCommand()
+			return
+		case "uninstall":
+			runUninstallCommand()
+			return
 		}
 	}
 
@@ -231,6 +248,204 @@ func runUpdateCommand() {
 	}
 
 	fmt.Printf("Done.\nSuccessfully updated to v%s.\n", latest)
+}
+
+func runStatusCommand() {
+	const (
+		bold  = "\033[1m"
+		dim   = "\033[2m"
+		green = "\033[0;32m"
+		red   = "\033[0;31m"
+		nc    = "\033[0m"
+	)
+
+	label := func(s string) string { return fmt.Sprintf("  %s%-16s%s", dim, s, nc) }
+
+	fmt.Printf("\n%spulsewise-collector%s v%s\n\n", bold, nc, version)
+
+	// Config
+	token, hostname, url, _, err := loadConfigFromFile()
+	if err != nil {
+		fmt.Printf("%s  Not configured — %v\n\n", red, nc)
+	} else {
+		maskedToken := token
+		if len(token) >= 8 {
+			maskedToken = token[:4] + "..." + token[len(token)-4:]
+		} else {
+			maskedToken = "****"
+		}
+		fmt.Printf("%sCollector%s\n", bold, nc)
+		fmt.Printf("%s %s\n", label("Hostname"), hostname)
+		fmt.Printf("%s %s\n", label("Token"), maskedToken)
+		fmt.Printf("%s %s\n", label("API endpoint"), url)
+		fmt.Printf("%s %s\n", label("Interval"), collectionInterval)
+		fmt.Println()
+	}
+
+	// Service status
+	fmt.Printf("%sService%s\n", bold, nc)
+	switch runtime.GOOS {
+	case "linux":
+		out, err := exec.Command("systemctl", "is-active", systemdUnit).Output()
+		state := strings.TrimSpace(string(out))
+		if err == nil && state == "active" {
+			fmt.Printf("%s %srunning%s (systemd)\n", label("Status"), green, nc)
+		} else {
+			fmt.Printf("%s %sstopped%s (systemd)\n", label("Status"), red, nc)
+		}
+	case "darwin":
+		err := exec.Command("launchctl", "list", launchdLabel).Run()
+		if err == nil {
+			fmt.Printf("%s %srunning%s (launchd)\n", label("Status"), green, nc)
+		} else {
+			fmt.Printf("%s %sstopped%s (launchd)\n", label("Status"), red, nc)
+		}
+	default:
+		fmt.Printf("%s unknown platform\n", label("Status"))
+	}
+
+	// Last pulse
+	if t, err := readLastPulse(); err == nil {
+		ago := time.Since(t).Round(time.Second)
+		fmt.Printf("%s %s  %s(%s ago)%s\n", label("Last pulse"), t.Format("2006-01-02 15:04:05"), dim, ago, nc)
+	} else {
+		fmt.Printf("%s never\n", label("Last pulse"))
+	}
+	fmt.Println()
+}
+
+func runUninstallCommand() {
+	const (
+		bold   = "\033[1m"
+		dim    = "\033[2m"
+		green  = "\033[0;32m"
+		red    = "\033[0;31m"
+		yellow = "\033[1;33m"
+		nc     = "\033[0m"
+	)
+
+	if os.Getuid() != 0 {
+		fmt.Fprintf(os.Stderr, "%sError:%s uninstall must be run as root (try sudo pulsewise-collector uninstall)\n", red, nc)
+		os.Exit(1)
+	}
+
+	selfPath, _ := os.Executable()
+	selfPath, _ = filepath.EvalSymlinks(selfPath)
+
+	fmt.Printf("\n%sUninstall pulsewise-collector%s\n\n", bold, nc)
+	fmt.Printf("  %sThe following will be removed:%s\n", dim, nc)
+
+	switch runtime.GOOS {
+	case "linux":
+		fmt.Printf("    Service   /etc/systemd/system/%s.service\n", systemdUnit)
+	case "darwin":
+		fmt.Printf("    Service   %s\n", launchdPlist)
+		fmt.Printf("    Logs      %s\n", macLogFile)
+	}
+	fmt.Printf("    Binary    %s\n", selfPath)
+	fmt.Printf("    Config    %s/\n", configDir)
+	fmt.Println()
+
+	fmt.Printf("  %sAre you sure?%s [y/N]: ", yellow, nc)
+	var reply string
+	fmt.Scanln(&reply)
+	if strings.ToLower(strings.TrimSpace(reply)) != "y" {
+		fmt.Println("\n  Cancelled.")
+		return
+	}
+	fmt.Println()
+
+	step := func(label, path string, fn func() error) {
+		fmt.Printf("  %-28s", label+"...")
+		if err := fn(); err != nil {
+			fmt.Printf("%sfailed%s (%v)\n", red, nc, err)
+		} else {
+			fmt.Printf("%sdone%s\n", green, nc)
+		}
+	}
+
+	switch runtime.GOOS {
+	case "linux":
+		step("Stopping service", "", func() error {
+			exec.Command("systemctl", "stop", systemdUnit).Run()
+			return nil
+		})
+		step("Disabling service", "", func() error {
+			exec.Command("systemctl", "disable", "--quiet", systemdUnit).Run()
+			return nil
+		})
+		step("Removing unit file", systemdUnitFile, func() error {
+			err := os.Remove(systemdUnitFile)
+			exec.Command("systemctl", "daemon-reload").Run()
+			return err
+		})
+	case "darwin":
+		step("Stopping service", "", func() error {
+			exec.Command("launchctl", "bootout", "system", launchdPlist).Run()
+			return nil
+		})
+		step("Removing plist", launchdPlist, func() error {
+			return os.Remove(launchdPlist)
+		})
+		step("Removing log file", macLogFile, func() error {
+			err := os.Remove(macLogFile)
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		})
+	}
+
+	step("Removing config dir", configDir, func() error {
+		return os.RemoveAll(configDir)
+	})
+
+	// Remove the binary last — the process keeps running from the
+	// already-mapped memory pages until os.Exit, so this is safe.
+	step("Removing binary", selfPath, func() error {
+		return os.Remove(selfPath)
+	})
+
+	fmt.Printf("\n  %sPulsewise Collector has been uninstalled.%s\n\n", green, nc)
+}
+
+// ─────────────────────────────────────────────────────────────
+// State file (last pulse timestamp)
+// ─────────────────────────────────────────────────────────────
+
+func resolveStateFilePath() string {
+	if _, err := os.Stat(filepath.Dir(stateFilePath)); err == nil {
+		return stateFilePath
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(homeDir, ".config", "pulsewise-collector", "state")
+}
+
+func writeLastPulse() {
+	path := resolveStateFilePath()
+	if path == "" {
+		return
+	}
+	_ = os.WriteFile(path, []byte(fmt.Sprintf("%d", time.Now().Unix())), 0644)
+}
+
+func readLastPulse() (time.Time, error) {
+	path := resolveStateFilePath()
+	if path == "" {
+		return time.Time{}, fmt.Errorf("no state path")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return time.Time{}, err
+	}
+	var ts int64
+	if _, err := fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &ts); err != nil {
+		return time.Time{}, err
+	}
+	return time.Unix(ts, 0), nil
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -474,14 +689,16 @@ func collectAndSend(config *Config) {
 		return
 	}
 
+	writeLastPulse()
 	log.Printf("Successfully sent metrics at %s", time.Now().Format(time.RFC3339))
 }
 
 func collectMetrics(config *Config) (*Metrics, error) {
 	metrics := &Metrics{
-		Timestamp:   time.Now(),
-		Token:       config.Token,
-		Hostname: config.Hostname,
+		Timestamp:        time.Now(),
+		Token:            config.Token,
+		Hostname:         config.Hostname,
+		CollectorVersion: version,
 	}
 
 	// Uptime
