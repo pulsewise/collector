@@ -1,3 +1,10 @@
 dump*
 deploy.sh
 pulsewise-collector
+
+# AI tools
+.claude/
+CLAUDE.md
+.cursor/
+.copilot/
+.aider*
