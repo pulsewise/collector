@@ -127,20 +127,6 @@
     "slow_requests": 0,
     "accepted_conn": 84291
   },
-  "ssl": [
-    {
-      "domain": "example.com",
-      "expires_at": "2026-06-01T12:00:00Z",
-      "days_left": 95,
-      "valid": true
-    },
-    {
-      "domain": "api.example.com",
-      "expires_at": "2026-06-01T12:00:00Z",
-      "days_left": 95,
-      "valid": true
-    }
-  ],
   "ports": [
     { "port": 22,   "open": true,  "service": "ssh" },
     { "port": 80,   "open": true,  "service": "http" },

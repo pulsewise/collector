@@ -35,7 +35,6 @@ Optional integrations (configured separately):
 |----------|---------|
 | **PHP-FPM** | Active/idle/total workers, max children reached, slow requests, listen queue, accepted connections |
 | **Nginx** | Active connections, reading/writing/waiting, accepts/handled/requests |
-| **SSL certificates** | Days until expiry, expiry date, validity status per domain |
 | **Port checks** | TCP reachability per port with service name (ssh, mysql, redis, etc.) |
 
 See [`payload.json`](payload.json) for a full example of the JSON sent to the API.
@@ -74,7 +73,6 @@ All other options are optional:
 |-----|---------|-------------|
 | `FPM_STATUS_URL` | `http://127.0.0.1/fpm-status` | PHP-FPM status page URL (`pm.status_path` must be set in your pool config) |
 | `NGINX_STATUS_URL` | `http://127.0.0.1/nginx-status` | Nginx `stub_status` URL |
-| `SSL_DOMAINS` | `example.com,api.example.com` | Comma-separated domains to check SSL cert expiry on |
 | `CHECK_PORTS` | `22,80,443,3306,6379` | Comma-separated ports to check TCP availability on |
 
 See [`config.example`](config.example) for a commented reference.

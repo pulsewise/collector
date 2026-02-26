@@ -25,8 +25,5 @@ TOKEN=your-token-here
 # Nginx stub_status URL (requires stub_status module and location block)
 # NGINX_STATUS_URL=http://127.0.0.1/nginx-status
 
-# SSL certificate expiry checks — comma-separated list of domains
-# SSL_DOMAINS=example.com,api.example.com
-
 # TCP port availability checks — comma-separated list of port numbers
 # CHECK_PORTS=22,80,443,3306,6379

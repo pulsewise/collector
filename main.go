@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"crypto/tls"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -70,7 +69,6 @@ type Config struct {
 	AutoUpdate     bool
 	FPMStatusURL   string
 	NginxStatusURL string
-	SSLDomains     []string
 	CheckPorts     []int
 }
 
@@ -93,7 +91,6 @@ type Metrics struct {
 	TCP             *TCPStats        `json:"tcp,omitempty"`
 	FileDescriptors *FileDescriptors `json:"file_descriptors,omitempty"`
 	FPM             *FPMPoolStats    `json:"fpm,omitempty"`
-	SSL             []SSLCertInfo    `json:"ssl,omitempty"`
 	Ports           []PortCheck      `json:"ports,omitempty"`
 	Nginx           *NginxStats      `json:"nginx,omitempty"`
 }
@@ -145,14 +142,6 @@ type FPMPoolStats struct {
 	MaxListenQueue     int    `json:"max_listen_queue"`
 	SlowRequests       int    `json:"slow_requests"`
 	AcceptedConn       int    `json:"accepted_conn"`
-}
-
-type SSLCertInfo struct {
-	Domain    string    `json:"domain"`
-	ExpiresAt time.Time `json:"expires_at"`
-	DaysLeft  int       `json:"days_left"`
-	Valid      bool      `json:"valid"`
-	Error     string    `json:"error,omitempty"`
 }
 
 type PortCheck struct {
@@ -822,12 +811,6 @@ func loadConfigFromFile() (*Config, error) {
 			cfg.FPMStatusURL = val
 		case "NGINX_STATUS_URL":
 			cfg.NginxStatusURL = val
-		case "SSL_DOMAINS":
-			for _, d := range strings.Split(val, ",") {
-				if d = strings.TrimSpace(d); d != "" {
-					cfg.SSLDomains = append(cfg.SSLDomains, d)
-				}
-			}
 		case "CHECK_PORTS":
 			for _, p := range strings.Split(val, ",") {
 				p = strings.TrimSpace(p)
@@ -1142,9 +1125,6 @@ func collectMetrics(config *Config) (*Metrics, error) {
 	if config.NginxStatusURL != "" {
 		metrics.Nginx = collectNginxStats(config.NginxStatusURL)
 	}
-	if len(config.SSLDomains) > 0 {
-		metrics.SSL = collectSSLCerts(config.SSLDomains)
-	}
 	if len(config.CheckPorts) > 0 {
 		metrics.Ports = collectPortChecks(config.CheckPorts)
 	}
@@ -1326,59 +1306,6 @@ func collectNginxStats(statusURL string) *NginxStats {
 	}
 
 	return stats
-}
-
-func collectSSLCerts(domains []string) []SSLCertInfo {
-	results := make([]SSLCertInfo, 0, len(domains))
-	for _, domain := range domains {
-		results = append(results, checkSSLCert(domain))
-	}
-	return results
-}
-
-func checkSSLCert(domain string) SSLCertInfo {
-	// Strip any scheme/path — we only need the hostname
-	domain = strings.TrimPrefix(domain, "https://")
-	domain = strings.TrimPrefix(domain, "http://")
-	if idx := strings.Index(domain, "/"); idx != -1 {
-		domain = domain[:idx]
-	}
-
-	info := SSLCertInfo{Domain: domain}
-
-	// Resolve SNI hostname separately if domain includes a port
-	host := domain
-	addr := domain + ":443"
-	if strings.Contains(domain, ":") {
-		host = strings.Split(domain, ":")[0]
-		addr = domain
-	}
-
-	conn, err := tls.DialWithDialer(
-		&net.Dialer{Timeout: 5 * time.Second},
-		"tcp",
-		addr,
-		&tls.Config{ServerName: host},
-	)
-	if err != nil {
-		info.Error = err.Error()
-		return info
-	}
-	defer conn.Close()
-
-	certs := conn.ConnectionState().PeerCertificates
-	if len(certs) == 0 {
-		info.Error = "no certificates returned"
-		return info
-	}
-
-	cert := certs[0]
-	now := time.Now()
-	info.ExpiresAt = cert.NotAfter.UTC()
-	info.DaysLeft = int(cert.NotAfter.Sub(now).Hours() / 24)
-	info.Valid = now.Before(cert.NotAfter) && now.After(cert.NotBefore)
-
-	return info
 }
 
 func collectPortChecks(ports []int) []PortCheck {
