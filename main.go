@@ -3,11 +3,13 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -24,7 +26,7 @@ import (
 	"github.com/shirou/gopsutil/v3/host"
 	"github.com/shirou/gopsutil/v3/load"
 	"github.com/shirou/gopsutil/v3/mem"
-	"github.com/shirou/gopsutil/v3/net"
+	psnet "github.com/shirou/gopsutil/v3/net"
 	"github.com/shirou/gopsutil/v3/process"
 )
 
@@ -60,12 +62,16 @@ const (
 )
 
 type Config struct {
-	Token      string
-	Hostname   string
-	URL        string
-	Interval   time.Duration
-	Debug      bool
-	AutoUpdate bool
+	Token          string
+	Hostname       string
+	URL            string
+	Interval       time.Duration
+	Debug          bool
+	AutoUpdate     bool
+	FPMStatusURL   string
+	NginxStatusURL string
+	SSLDomains     []string
+	CheckPorts     []int
 }
 
 type Metrics struct {
@@ -86,6 +92,10 @@ type Metrics struct {
 	Processes       []ProcessInfo    `json:"processes"`
 	TCP             *TCPStats        `json:"tcp,omitempty"`
 	FileDescriptors *FileDescriptors `json:"file_descriptors,omitempty"`
+	FPM             *FPMPoolStats    `json:"fpm,omitempty"`
+	SSL             []SSLCertInfo    `json:"ssl,omitempty"`
+	Ports           []PortCheck      `json:"ports,omitempty"`
+	Nginx           *NginxStats      `json:"nginx,omitempty"`
 }
 
 type SystemInfo struct {
@@ -122,6 +132,43 @@ type TCPStats struct {
 type FileDescriptors struct {
 	Used int `json:"used"`
 	Max  int `json:"max"`
+}
+
+type FPMPoolStats struct {
+	Pool               string `json:"pool"`
+	ActiveProcesses    int    `json:"active_processes"`
+	IdleProcesses      int    `json:"idle_processes"`
+	TotalProcesses     int    `json:"total_processes"`
+	MaxActiveProcesses int    `json:"max_active_processes"`
+	MaxChildrenReached int    `json:"max_children_reached"`
+	ListenQueue        int    `json:"listen_queue"`
+	MaxListenQueue     int    `json:"max_listen_queue"`
+	SlowRequests       int    `json:"slow_requests"`
+	AcceptedConn       int    `json:"accepted_conn"`
+}
+
+type SSLCertInfo struct {
+	Domain    string    `json:"domain"`
+	ExpiresAt time.Time `json:"expires_at"`
+	DaysLeft  int       `json:"days_left"`
+	Valid      bool      `json:"valid"`
+	Error     string    `json:"error,omitempty"`
+}
+
+type PortCheck struct {
+	Port    int    `json:"port"`
+	Open    bool   `json:"open"`
+	Service string `json:"service,omitempty"`
+}
+
+type NginxStats struct {
+	ActiveConnections int `json:"active_connections"`
+	Reading           int `json:"reading"`
+	Writing           int `json:"writing"`
+	Waiting           int `json:"waiting"`
+	Accepts           int `json:"accepts"`
+	Handled           int `json:"handled"`
+	Requests          int `json:"requests"`
 }
 
 type MemoryMetrics struct {
@@ -370,24 +417,24 @@ func runStatusCommand() {
 	fmt.Printf("\n%spulsewise-collector%s v%s\n\n", ansiBold, ansiReset, version)
 
 	// Config
-	token, hostname, url, _, autoUpdate, err := loadConfigFromFile()
+	cfg, err := loadConfigFromFile()
 	if err != nil {
 		fmt.Printf("%s  Not configured — %v\n\n", ansiRed, ansiReset)
 	} else {
-		maskedToken := token
-		if len(token) >= 8 {
-			maskedToken = token[:4] + "..." + token[len(token)-4:]
+		maskedToken := cfg.Token
+		if len(cfg.Token) >= 8 {
+			maskedToken = cfg.Token[:4] + "..." + cfg.Token[len(cfg.Token)-4:]
 		} else {
 			maskedToken = "****"
 		}
 		autoUpdateStr := ansiGreen + "enabled" + ansiReset
-		if !autoUpdate {
+		if !cfg.AutoUpdate {
 			autoUpdateStr = ansiDim + "disabled" + ansiReset
 		}
 		fmt.Printf("%sCollector%s\n", ansiBold, ansiReset)
-		fmt.Printf("%s %s\n", label("Hostname"), hostname)
+		fmt.Printf("%s %s\n", label("Hostname"), cfg.Hostname)
 		fmt.Printf("%s %s\n", label("Token"), maskedToken)
-		fmt.Printf("%s %s\n", label("API endpoint"), url)
+		fmt.Printf("%s %s\n", label("API endpoint"), cfg.URL)
 		fmt.Printf("%s %s\n", label("Interval"), collectionInterval)
 		fmt.Printf("%s %s\n", label("Auto-update"), autoUpdateStr)
 		fmt.Println()
@@ -717,22 +764,14 @@ func execSelf() {
 // ─────────────────────────────────────────────────────────────
 
 func loadConfig() *Config {
-	token, hostname, url, debug, autoUpdate, err := loadConfigFromFile()
+	cfg, err := loadConfigFromFile()
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
-
-	return &Config{
-		Token:      token,
-		Hostname:   hostname,
-		URL:        url,
-		Interval:   collectionInterval,
-		Debug:      debug,
-		AutoUpdate: autoUpdate,
-	}
+	return cfg
 }
 
-func loadConfigFromFile() (string, string, string, bool, bool, error) {
+func loadConfigFromFile() (*Config, error) {
 	configPath := configFilePath
 
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
@@ -747,13 +786,15 @@ func loadConfigFromFile() (string, string, string, bool, bool, error) {
 
 	file, err := os.Open(configPath)
 	if err != nil {
-		return "", "", "", false, false, fmt.Errorf("config file not found at %s: %w", configPath, err)
+		return nil, fmt.Errorf("config file not found at %s: %w", configPath, err)
 	}
 	defer file.Close()
 
-	var token, hostname, url string
-	var debug bool
-	autoUpdate := true
+	cfg := &Config{
+		URL:        defaultURL,
+		Interval:   collectionInterval,
+		AutoUpdate: true,
+	}
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
@@ -761,46 +802,54 @@ func loadConfigFromFile() (string, string, string, bool, bool, error) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		if strings.HasPrefix(line, "TOKEN=") {
-			token = strings.TrimPrefix(line, "TOKEN=")
-			token = strings.Trim(token, `"'`)
+		key, val, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
 		}
-		if strings.HasPrefix(line, "HOSTNAME=") {
-			hostname = strings.TrimPrefix(line, "HOSTNAME=")
-			hostname = strings.Trim(hostname, `"'`)
-		}
-		if strings.HasPrefix(line, "URL=") {
-			url = strings.TrimPrefix(line, "URL=")
-			url = strings.Trim(url, `"'`)
-		}
-		if strings.HasPrefix(line, "DEBUG=") {
-			val := strings.TrimPrefix(line, "DEBUG=")
-			val = strings.Trim(val, `"'`)
-			debug = val == "true" || val == "1"
-		}
-		if strings.HasPrefix(line, "AUTO_UPDATE=") {
-			val := strings.TrimPrefix(line, "AUTO_UPDATE=")
-			val = strings.Trim(val, `"'`)
-			autoUpdate = val != "false" && val != "0"
+		val = strings.Trim(val, `"'`)
+		switch key {
+		case "TOKEN":
+			cfg.Token = val
+		case "HOSTNAME":
+			cfg.Hostname = val
+		case "URL":
+			cfg.URL = val
+		case "DEBUG":
+			cfg.Debug = val == "true" || val == "1"
+		case "AUTO_UPDATE":
+			cfg.AutoUpdate = val != "false" && val != "0"
+		case "FPM_STATUS_URL":
+			cfg.FPMStatusURL = val
+		case "NGINX_STATUS_URL":
+			cfg.NginxStatusURL = val
+		case "SSL_DOMAINS":
+			for _, d := range strings.Split(val, ",") {
+				if d = strings.TrimSpace(d); d != "" {
+					cfg.SSLDomains = append(cfg.SSLDomains, d)
+				}
+			}
+		case "CHECK_PORTS":
+			for _, p := range strings.Split(val, ",") {
+				p = strings.TrimSpace(p)
+				if port, err := strconv.Atoi(p); err == nil && port > 0 && port < 65536 {
+					cfg.CheckPorts = append(cfg.CheckPorts, port)
+				}
+			}
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		return "", "", "", false, false, fmt.Errorf("error reading config file: %w", err)
+		return nil, fmt.Errorf("error reading config file: %w", err)
 	}
 
-	if token == "" {
-		return "", "", "", false, false, fmt.Errorf("TOKEN not found in config file")
+	if cfg.Token == "" {
+		return nil, fmt.Errorf("TOKEN not found in config file")
 	}
-	if hostname == "" {
-		hostname, _ = os.Hostname()
-	}
-
-	if url == "" {
-		url = defaultURL
+	if cfg.Hostname == "" {
+		cfg.Hostname, _ = os.Hostname()
 	}
 
-	return token, hostname, url, debug, autoUpdate, nil
+	return cfg, nil
 }
 
 func collectAndSend(config *Config) {
@@ -1037,7 +1086,7 @@ func collectMetrics(config *Config) (*Metrics, error) {
 	}
 
 	// Network (per-second rates)
-	netStats, err := net.IOCounters(false)
+	netStats, err := psnet.IOCounters(false)
 	if err != nil {
 		log.Printf("Warning: Failed to get network stats: %v", err)
 	} else if len(netStats) > 0 {
@@ -1086,15 +1135,29 @@ func collectMetrics(config *Config) (*Metrics, error) {
 	metrics.TCP = collectTCPStats()
 	metrics.FileDescriptors = collectFileDescriptors()
 
+	// Optional integrations (only collected when configured)
+	if config.FPMStatusURL != "" {
+		metrics.FPM = collectFPMStats(config.FPMStatusURL)
+	}
+	if config.NginxStatusURL != "" {
+		metrics.Nginx = collectNginxStats(config.NginxStatusURL)
+	}
+	if len(config.SSLDomains) > 0 {
+		metrics.SSL = collectSSLCerts(config.SSLDomains)
+	}
+	if len(config.CheckPorts) > 0 {
+		metrics.Ports = collectPortChecks(config.CheckPorts)
+	}
+
 	return metrics, nil
 }
 
 func collectTCPStats() *TCPStats {
-	conns, err := net.Connections("tcp")
+	conns, err := psnet.Connections("tcp")
 	if err != nil {
 		return nil
 	}
-	conns6, _ := net.Connections("tcp6")
+	conns6, _ := psnet.Connections("tcp6")
 	conns = append(conns, conns6...)
 
 	stats := &TCPStats{}
@@ -1157,6 +1220,183 @@ func collectFileDescriptors() *FileDescriptors {
 	}
 
 	return nil
+}
+
+// knownPortServices maps common port numbers to service names.
+var knownPortServices = map[int]string{
+	21:    "ftp",
+	22:    "ssh",
+	25:    "smtp",
+	80:    "http",
+	443:   "https",
+	3306:  "mysql",
+	5432:  "postgres",
+	6379:  "redis",
+	8080:  "http-alt",
+	8443:  "https-alt",
+	9200:  "elasticsearch",
+	11211: "memcached",
+	27017: "mongodb",
+}
+
+func collectFPMStats(statusURL string) *FPMPoolStats {
+	url := statusURL
+	if strings.Contains(url, "?") {
+		url += "&json"
+	} else {
+		url += "?json"
+	}
+
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+
+	// PHP-FPM JSON keys contain spaces (e.g. "active processes")
+	var data struct {
+		Pool               string `json:"pool"`
+		ActiveProcesses    int    `json:"active processes"`
+		IdleProcesses      int    `json:"idle processes"`
+		TotalProcesses     int    `json:"total processes"`
+		MaxActiveProcesses int    `json:"max active processes"`
+		MaxChildrenReached int    `json:"max children reached"`
+		ListenQueue        int    `json:"listen queue"`
+		MaxListenQueue     int    `json:"max listen queue"`
+		SlowRequests       int    `json:"slow requests"`
+		AcceptedConn       int    `json:"accepted conn"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return nil
+	}
+
+	return &FPMPoolStats{
+		Pool:               data.Pool,
+		ActiveProcesses:    data.ActiveProcesses,
+		IdleProcesses:      data.IdleProcesses,
+		TotalProcesses:     data.TotalProcesses,
+		MaxActiveProcesses: data.MaxActiveProcesses,
+		MaxChildrenReached: data.MaxChildrenReached,
+		ListenQueue:        data.ListenQueue,
+		MaxListenQueue:     data.MaxListenQueue,
+		SlowRequests:       data.SlowRequests,
+		AcceptedConn:       data.AcceptedConn,
+	}
+}
+
+func collectNginxStats(statusURL string) *NginxStats {
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(statusURL)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil
+	}
+
+	// Nginx stub_status format:
+	// Active connections: 291
+	// server accepts handled requests
+	//  16630948 16630948 31070465
+	// Reading: 6 Writing: 179 Waiting: 106
+	stats := &NginxStats{}
+	lines := strings.Split(string(body), "\n")
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "Active connections:"):
+			fmt.Sscanf(strings.TrimPrefix(line, "Active connections:"), " %d", &stats.ActiveConnections)
+		case strings.HasPrefix(line, "Reading:"):
+			fmt.Sscanf(line, "Reading: %d Writing: %d Waiting: %d", &stats.Reading, &stats.Writing, &stats.Waiting)
+		case i > 0 && strings.TrimSpace(lines[i-1]) == "server accepts handled requests":
+			fmt.Sscanf(line, "%d %d %d", &stats.Accepts, &stats.Handled, &stats.Requests)
+		}
+	}
+
+	return stats
+}
+
+func collectSSLCerts(domains []string) []SSLCertInfo {
+	results := make([]SSLCertInfo, 0, len(domains))
+	for _, domain := range domains {
+		results = append(results, checkSSLCert(domain))
+	}
+	return results
+}
+
+func checkSSLCert(domain string) SSLCertInfo {
+	// Strip any scheme/path — we only need the hostname
+	domain = strings.TrimPrefix(domain, "https://")
+	domain = strings.TrimPrefix(domain, "http://")
+	if idx := strings.Index(domain, "/"); idx != -1 {
+		domain = domain[:idx]
+	}
+
+	info := SSLCertInfo{Domain: domain}
+
+	// Resolve SNI hostname separately if domain includes a port
+	host := domain
+	addr := domain + ":443"
+	if strings.Contains(domain, ":") {
+		host = strings.Split(domain, ":")[0]
+		addr = domain
+	}
+
+	conn, err := tls.DialWithDialer(
+		&net.Dialer{Timeout: 5 * time.Second},
+		"tcp",
+		addr,
+		&tls.Config{ServerName: host},
+	)
+	if err != nil {
+		info.Error = err.Error()
+		return info
+	}
+	defer conn.Close()
+
+	certs := conn.ConnectionState().PeerCertificates
+	if len(certs) == 0 {
+		info.Error = "no certificates returned"
+		return info
+	}
+
+	cert := certs[0]
+	now := time.Now()
+	info.ExpiresAt = cert.NotAfter.UTC()
+	info.DaysLeft = int(cert.NotAfter.Sub(now).Hours() / 24)
+	info.Valid = now.Before(cert.NotAfter) && now.After(cert.NotBefore)
+
+	return info
+}
+
+func collectPortChecks(ports []int) []PortCheck {
+	results := make([]PortCheck, 0, len(ports))
+	for _, port := range ports {
+		addr := fmt.Sprintf("127.0.0.1:%d", port)
+		conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+		open := err == nil
+		if open {
+			conn.Close()
+		}
+		results = append(results, PortCheck{
+			Port:    port,
+			Open:    open,
+			Service: knownPortServices[port],
+		})
+	}
+	return results
 }
 
 func collectTopProcesses() ([]ProcessInfo, error) {

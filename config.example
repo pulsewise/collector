@@ -14,3 +14,19 @@ TOKEN=your-token-here
 
 # Optional — logs full response body from the server
 # DEBUG=true
+
+# ─────────────────────────────────────────────────────────────
+# Optional integrations
+# ─────────────────────────────────────────────────────────────
+
+# PHP-FPM status page URL (requires pm.status_path = /status in php-fpm pool config)
+# FPM_STATUS_URL=http://127.0.0.1/fpm-status
+
+# Nginx stub_status URL (requires stub_status module and location block)
+# NGINX_STATUS_URL=http://127.0.0.1/nginx-status
+
+# SSL certificate expiry checks — comma-separated list of domains
+# SSL_DOMAINS=example.com,api.example.com
+
+# TCP port availability checks — comma-separated list of port numbers
+# CHECK_PORTS=22,80,443,3306,6379
