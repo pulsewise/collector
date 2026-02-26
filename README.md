@@ -42,11 +42,12 @@ See [`payload.json`](payload.json) for a full example of the JSON sent to the AP
 ## CLI Commands
 
 ```bash
-sudo pulsewise-collector version    # show version, check for updates
-sudo pulsewise-collector update     # download and install latest version
-sudo pulsewise-collector status     # show config, service state, last pulse
-sudo pulsewise-collector dump       # print full metrics payload as JSON
-sudo pulsewise-collector uninstall  # remove binary, config, and service
+sudo pulsewise-collector version                     # show version, check for updates
+sudo pulsewise-collector update                      # download and install latest version
+sudo pulsewise-collector update-token <new-token>   # replace the API token and restart
+sudo pulsewise-collector status                      # show config, service state, last pulse
+sudo pulsewise-collector dump                        # print full metrics payload as JSON
+sudo pulsewise-collector uninstall                   # remove binary, config, and service
 ```
 
 ## Configuration

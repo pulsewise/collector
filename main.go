@@ -241,6 +241,9 @@ func main() {
 		case "dump":
 			runDumpCommand()
 			return
+		case "update-token":
+			runUpdateTokenCommand()
+			return
 		}
 	}
 
@@ -393,6 +396,60 @@ func reexecWithSudo() {
 	if err := cmd.Run(); err != nil {
 		os.Exit(1)
 	}
+}
+
+func runUpdateTokenCommand() {
+	if os.Getuid() != 0 {
+		reexecWithSudo()
+		return
+	}
+
+	if len(os.Args) < 3 || strings.TrimSpace(os.Args[2]) == "" {
+		fmt.Fprintf(os.Stderr, "\n  %sUsage:%s pulsewise-collector update-token <new-token>\n\n", ansiBold, ansiReset)
+		os.Exit(1)
+	}
+	newToken := strings.TrimSpace(os.Args[2])
+
+	// Resolve config path (same logic as loadConfigFromFile)
+	configPath := configFilePath
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		homeDir, _ := os.UserHomeDir()
+		if homeDir != "" {
+			local := filepath.Join(homeDir, ".config", "pulsewise-collector", "config")
+			if _, err := os.Stat(local); err == nil {
+				configPath = local
+			}
+		}
+	}
+
+	// Read existing config, replace TOKEN line
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "\n  %sError:%s could not read config: %v\n\n", ansiRed, ansiReset, err)
+		os.Exit(1)
+	}
+
+	lines := strings.Split(string(data), "\n")
+	tokenFound := false
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "TOKEN=") {
+			lines[i] = "TOKEN=" + newToken
+			tokenFound = true
+			break
+		}
+	}
+	if !tokenFound {
+		// Prepend if TOKEN line is somehow missing
+		lines = append([]string{"TOKEN=" + newToken}, lines...)
+	}
+
+	if err := os.WriteFile(configPath, []byte(strings.Join(lines, "\n")), 0600); err != nil {
+		fmt.Fprintf(os.Stderr, "\n  %sError:%s could not write config: %v\n\n", ansiRed, ansiReset, err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("\n  %sToken updated.%s\n", ansiGreen, ansiReset)
+	restartService()
 }
 
 func runStatusCommand() {
